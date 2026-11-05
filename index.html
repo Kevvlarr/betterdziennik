@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dziennik</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Dziennik">
+<meta name="theme-color" content="#4f46e5">
+<style>
+:root{--bg:#f4f5fb;--card:#fff;--text:#1b1d2a;--muted:#6b7090;--line:#e4e6f2;--brand:#4f46e5;
+--g6:#16a34a;--g5:#22c55e;--g4:#3b82f6;--g3:#f59e0b;--g2:#f97316;--g1:#ef4444;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#0f1117;--card:#181b25;--text:#eceefa;--muted:#8d92b3;--line:#262a3a;--brand:#818cf8;color-scheme:dark}}
+*{box-sizing:border-box;margin:0}
+body{font:16px/1.4 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);
+padding:env(safe-area-inset-top) 0 calc(72px + env(safe-area-inset-bottom))}
+header{padding:20px 16px 8px;display:flex;justify-content:space-between;align-items:flex-start}
+h1{font-size:26px}.sub{color:var(--muted);font-size:14px}
+main{padding:8px 16px;max-width:640px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.subj{font-weight:600}.avg{font-weight:700;font-size:18px;color:var(--brand)}
+.grades{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.g{min-width:38px;height:38px;border-radius:10px;display:grid;place-items:center;color:#fff;font-weight:700;border:0;cursor:pointer;font-size:16px}
+.g small{font-size:10px;opacity:.8;margin-left:1px}
+.v6{background:var(--g6)}.v5{background:var(--g5)}.v4{background:var(--g4)}.v3{background:var(--g3)}.v2{background:var(--g2)}.v1{background:var(--g1)}.v0{background:var(--muted)}
+.detail{margin-top:10px;padding:10px;border-radius:10px;background:var(--bg);font-size:14px}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--line);
+padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;padding:12px 0;background:none;border:0;color:var(--muted);font:600 13px system-ui;cursor:pointer}
+nav button.on{color:var(--brand)}nav span{display:block;font-size:20px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--brand);flex:none}
+input,textarea,select{width:100%;padding:12px;margin-bottom:10px;border-radius:12px;border:1px solid var(--line);
+background:var(--bg);color:var(--text);font:inherit}
+.btn{background:var(--brand);color:#fff;border:0;border-radius:12px;padding:12px 18px;font:600 15px system-ui;cursor:pointer}
+.btn.ghost{background:none;color:var(--brand);padding:6px 0}
+.hide{display:none}.note{color:var(--muted);font-size:13px;margin-top:6px}
+.chip{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer}
+.chip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+.chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px}
+.err{color:var(--g1);font-size:13px}
+.center{text-align:center;padding:60px 20px;color:var(--muted)}
+.spin{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--brand);border-radius:50%;
+margin:0 auto 12px;animation:sp 0.8s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header><div><h1 id="title">Oceny</h1><div class="sub" id="sub"></div></div></header>
+<main id="app"></main>
+<nav>
+<button data-t="grades" class="on"><span>📊</span>Oceny</button>
+<button data-t="msgs"><span>✉️</span>Wiadomości</button>
+<button data-t="set"><span>⚙️</span>Ustawienia</button>
+</nav>
+<script>
+// ===================================================================
+// Storage: credential (keypair) + accounts list, kept in localStorage.
+// Nothing here ever leaves the device except to your own Worker.
+// ===================================================================
+const store = {
+  get credential(){ try{return JSON.parse(localStorage.getItem('credential'))}catch{return null} },
+  set credential(v){ localStorage.setItem('credential', JSON.stringify(v)) },
+  get accounts(){ try{return JSON.parse(localStorage.getItem('accounts'))||[]}catch{return []} },
+  set accounts(v){ localStorage.setItem('accounts', JSON.stringify(v)) },
+  get activeIdx(){ return Number(localStorage.getItem('activeIdx')||0) },
+  set activeIdx(v){ localStorage.setItem('activeIdx', String(v)) },
+  get workerUrl(){ return localStorage.getItem('worker')||'' },
+  set workerUrl(v){ localStorage.setItem('worker', v) },
+};
+
+// ===================================================================
+// Worker calls
+// ===================================================================
+async function workerFetch(path, opt={}){
+  const base = store.workerUrl;
+  if(!base) throw new Error('NO_WORKER');
+  const headers = {...(opt.headers||{})};
+  if(store.credential) headers['x-keypair'] = JSON.stringify(store.credential);
+  const r = await fetch(base+path, {...opt, headers});
+  const data = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data.error||r.status);
+  return data;
+}
+async function register(tokens, tenant){
+  const data = await workerFetch('/register', {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({tokens, tenant})
+  });
+  store.credential = data; // {restUrl, deviceId, certificate, privateKeyB64, fingerprint, deviceOs}
+  return data;
+}
+async function loadAccounts(){
+  const list = await workerFetch('/api/accounts');
+  store.accounts = list;
+  return list;
+}
+function activeAccount(){
+  const list = store.accounts;
+  return list[store.activeIdx] || list[0] || null;
+}
+function fmtDate(d){
+  const pad=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+async function loadGrades(){
+  const acc = activeAccount();
+  if(!acc) return [];
+  const periodId = (acc.Periods||[]).find(p=>p.Current)?.Id || acc.Periods?.at(-1)?.Id;
+  const q = new URLSearchParams({
+    unitId: acc.Unit.Id, pupilId: acc.Pupil.Id, periodId,
+    lastSyncDate: fmtDate(new Date(0)), lastId: -2147483648, pageSize: 500,
+  });
+  return workerFetch('/api/grades?'+q);
+}
+
+// ===================================================================
+// Mock fallback — used only when no worker URL is set, so the UI is
+// still browsable before deployment.
+// ===================================================================
+const MOCK_GRADES=[
+ {subject:'Matematyka',items:[{v:5,w:3,d:'Sprawdzian: funkcje',date:'2026-10-21'},{v:4,w:2,d:'Kartkówka',date:'2026-10-28'}]},
+ {subject:'Język polski',items:[{v:4,w:3,d:'Rozprawka',date:'2026-10-15'}]},
+];
+
+// ===================================================================
+// Helpers
+// ===================================================================
+const $=s=>document.querySelector(s),app=$('#app');
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const avg=it=>{const w=it.reduce((a,x)=>a+x.w,0);return w?(it.reduce((a,x)=>a+x.v*x.w,0)/w).toFixed(2):'–'};
+const fmtShort=d=>new Date(d).toLocaleDateString('pl-PL',{day:'numeric',month:'short'});
+
+// Matches the confirmed Grade model: Content is the displayed grade text
+// ("5+", "bz", etc.), Value is the nullable numeric form used for averaging
+// and coloring, Column.Weight/Column.Subject.Name come from the grade column.
+function normalizeGrades(raw){
+  const bySubject = {};
+  for(const g of raw){
+    const subj = g.Column?.Subject?.Name || 'Inny przedmiot';
+    (bySubject[subj] ??= []).push({
+      v: g.Content,
+      numVal: g.Value,
+      w: g.Column?.Weight ?? 1,
+      d: g.Comment || '',
+      date: g.CreatedAt || null,
+    });
+  }
+  return Object.entries(bySubject).map(([subject,items])=>({subject,items}));
+}
+function gradeClass(numVal){
+  const n = Math.round(Number(numVal));
+  return Number.isFinite(n) && n>=1 && n<=6 ? `v${n}` : 'v0';
+}
+
+// ===================================================================
+// Views
+// ===================================================================
+async function grades(){
+  $('#title').textContent='Oceny';$('#sub').textContent='';
+  app.innerHTML = `<div class="center"><div class="spin"></div>Wczytywanie…</div>`;
+
+  let data, usingMock=false;
+  try{
+    if(!store.workerUrl) throw new Error('NO_WORKER');
+    if(!store.credential){
+      app.innerHTML = `<div class="card"><b>Nie zalogowano</b><div class="note">Przejdź do Ustawień, aby się zalogować.</div></div>`;
+      return;
+    }
+    if(!store.accounts.length) await loadAccounts();
+    const raw = await loadGrades();
+    data = normalizeGrades(raw);
+  }catch(e){
+    data = MOCK_GRADES; usingMock = true;
+  }
+
+  const accountPicker = store.accounts.length>1 ? `<div class="chips">${store.accounts.map((a,i)=>
+    `<button class="chip ${i===store.activeIdx?'on':''}" data-acc="${i}">${esc(a.Pupil.FirstName)}</button>`).join('')}</div>` : '';
+
+  // MOCK_GRADES uses {v: number} directly; real data uses {numVal}. Normalize both to one field for averaging.
+  const numOf = x => x.numVal ?? x.v;
+  const all = data.flatMap(s=>s.items);
+  $('#sub').textContent = (usingMock?'Dane demo · ':'') + 'Średnia ogólna: '+avg(all.map(x=>({v:Number(numOf(x))||0,w:1})));
+
+  app.innerHTML = accountPicker + data.map((s,i)=>`<div class="card"><div class="row">
+    <span class="subj">${esc(s.subject)}</span><span class="avg">${avg(s.items.map(x=>({v:Number(numOf(x))||0,w:x.w})))}</span></div>
+    <div class="grades">${s.items.map((g,j)=>`<button class="g ${gradeClass(numOf(g))}" data-k="${i}-${j}">${esc(g.v)}<small>${g.w}</small></button>`).join('')}</div>
+    <div class="detail hide" id="d${i}"></div></div>`).join('');
+
+  app.onclick=e=>{
+    const acc=e.target.closest('[data-acc]');
+    if(acc){ store.activeIdx=Number(acc.dataset.acc); grades(); return; }
+    const b=e.target.closest('.g');if(!b)return;
+    const[i,j]=b.dataset.k.split('-'),g=data[i].items[j],d=$('#d'+i);
+    d.innerHTML=`${g.d?esc(g.d)+'<br>':''}Ocena ${esc(g.v)} · waga ${g.w}${g.date?' · '+fmtShort(g.date):''}`;d.classList.remove('hide');
+  };
+}
+
+function msgs(){
+  $('#title').textContent='Wiadomości';$('#sub').textContent='';
+  const LIVE_URL='https://eduvulcan.pl';
+  app.innerHTML=`<div class="card">
+    <b>Wiadomości i usprawiedliwienia</b>
+    <div class="note" style="margin:8px 0 14px">
+      Ta część działa przez prawdziwą stronę eduVULCAN (pełny, bezpłatny dostęp).
+    </div>
+    <button class="btn" id="open" style="width:100%">Otwórz w eduVULCAN</button>
+  </div>`;
+  app.onclick=e=>{if(e.target.id==='open')window.open(LIVE_URL,'_blank')};
+}
+
+function settings(){
+  $('#title').textContent='Ustawienia';$('#sub').textContent='';
+  const loggedIn = !!store.credential;
+  app.innerHTML=`<div class="card"><b>Adres Workera</b>
+  <input id="w" placeholder="https://twoj-worker.workers.dev" value="${esc(store.workerUrl)}" style="margin-top:10px">
+  <button class="btn" id="save">Zapisz</button><div class="note" id="st1"></div></div>
+
+  <div class="card"><b>Konto eduVULCAN</b>
+  <div class="note" style="margin:6px 0 12px">${loggedIn?'Zalogowano · '+(store.accounts[0]?.Pupil?.FirstName||''):'Nie zalogowano'}</div>
+  ${loggedIn
+    ? `<button class="btn ghost" id="logout">Wyloguj (usuń dane z tego urządzenia)</button>`
+    : `<div class="note">Zaloguj się przez skrypt logowania (patrz README), a po przekierowaniu wrócisz tutaj automatycznie.</div>`}
+  </div>`;
+  app.onclick=e=>{
+    if(e.target.id==='save'){store.workerUrl=$('#w').value.trim().replace(/\/$/,'');$('#st1').textContent='Zapisano.';}
+    if(e.target.id==='logout'){localStorage.removeItem('credential');localStorage.removeItem('accounts');settings();}
+  };
+}
+
+const views={grades,msgs,set:settings};
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x===b));views[b.dataset.t]()});
+
+// ===================================================================
+// Boot: handle #register=<data> handoff from the login-capture userscript
+// ===================================================================
+async function boot(){
+  const hash = location.hash;
+  if(hash.startsWith('#register=')){
+    history.replaceState(null,'',location.pathname); // scrub tokens from the URL immediately
+    try{
+      const payload = JSON.parse(atob(decodeURIComponent(hash.slice('#register='.length))));
+      app.innerHTML = `<div class="center"><div class="spin"></div>Rejestrowanie urządzenia…</div>`;
+      await register(payload.tokens, payload.tenant);
+      await loadAccounts();
+    }catch(e){
+      app.innerHTML = `<div class="card"><b>Błąd rejestracji</b><div class="err">${esc(e.message)}</div></div>`;
+      return;
+    }
+  }
+  grades();
+}
+boot();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
